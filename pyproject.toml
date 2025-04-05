@@ -10,6 +10,8 @@ python = "^3.11"
 geopy = "^2.4.1"
 pandas = "^2.2.3"
 tqdm = "^4.67.1"
+matplotlib = "^3.10.1"
+seaborn = "^0.13.2"
 
 
 [tool.poetry.group.dev.dependencies]
