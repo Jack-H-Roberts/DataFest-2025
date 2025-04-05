@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "datafest"
+version = "0.1.0"
+description = ""
+authors = ["Michael Thomas <michaelhthomas@outlook.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+geopy = "^2.4.1"
+pandas = "^2.2.3"
+tqdm = "^4.67.1"
+
+
+[tool.poetry.group.dev.dependencies]
+notebook = "^7.3.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
