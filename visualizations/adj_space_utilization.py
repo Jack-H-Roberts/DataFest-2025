@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 
-def space_utlization_bar(market, is_premium_quality):
+def adj_space_utlization_bar(market, is_premium_quality):
     # Output filename based on market and quality
-    output_filename = f"visualizations/pngs/stacked_bars/{market.replace(' ', '')}{'Premium' if is_premium_quality == 1 else 'Standard'}.png"
+    output_filename = f"visualizations/pngs/adj_stacked_bars/adj_{market.replace(' ', '')}{'Premium' if is_premium_quality == 1 else 'Standard'}.png"
 
     # Read the main CSV file
     file_path = 'data/Cleaned PAD.csv'
@@ -14,6 +14,10 @@ def space_utlization_bar(market, is_premium_quality):
     # Read the inflation data
     inflation_path = 'data/Inflation Q over Q 2019-2024.csv'
     inflation_df = pd.read_csv(inflation_path)
+    
+    # Read the new occupancy data
+    occupancy_path = 'data/Major Market Occupancy Data.csv'
+    occupancy_df = pd.read_csv(occupancy_path)
 
     # Convert numeric columns to appropriate types in main dataframe
     numeric_columns = ['total_space', 'available_space', 'direct_available_space', 
@@ -29,13 +33,19 @@ def space_utlization_bar(market, is_premium_quality):
     # Ensure year columns are integers
     df['year'] = pd.to_numeric(df['year'], errors='coerce').astype('Int64')
     inflation_df['year'] = pd.to_numeric(inflation_df['year'], errors='coerce').astype('Int64')
+    occupancy_df['year'] = pd.to_numeric(occupancy_df['year'], errors='coerce').astype('Int64')
 
     # Handle quarter format differences - ensure both are integers
     df['quarter'] = pd.to_numeric(df['quarter'].astype(str).str.replace('Q', ''), errors='coerce').astype('Int64')
     inflation_df['quarter'] = pd.to_numeric(inflation_df['quarter'], errors='coerce').astype('Int64')
+    # Format occupancy quarter to match main dataframe
+    occupancy_df['quarter'] = pd.to_numeric(occupancy_df['quarter'].astype(str).str.replace('Q', ''), errors='coerce').astype('Int64')
 
     # Convert inflation data to numeric
     inflation_df['inflation_rate'] = pd.to_numeric(inflation_df['inflation_rate'], errors='coerce')
+    
+    # Convert occupancy data to numeric
+    occupancy_df['starting_occupancy_proportion'] = pd.to_numeric(occupancy_df['starting_occupancy_proportion'], errors='coerce')
 
     # Filter data for selected market and quality
     market_df = df[(df['market'] == market) & (df['is_premium_quality'] == is_premium_quality)].copy()
@@ -61,15 +71,21 @@ def space_utlization_bar(market, is_premium_quality):
     for col in ['used_space', 'direct_available_space', 'sublet_available_space', 'total_space', 'available_space']:
         market_df[col] = market_df[col] / mil_factor
 
-    # Calculate "Used Space" again (this appears redundant but keeping for consistency with original)
-    market_df['used_space'] = market_df['total_space'] - market_df['available_space']
-
-    # Fill NaN values with 0 for bar chart data (again, redundant but keeping for consistency)
-    for col in ['used_space', 'direct_available_space', 'sublet_available_space']:
-        market_df[col] = market_df[col].fillna(0)
-        
     # Merge with inflation data
     market_df = pd.merge(market_df, inflation_df, on=['year', 'quarter'], how='left')
+    
+    # Merge with occupancy data
+    market_df = pd.merge(market_df, 
+                         occupancy_df[['year', 'quarter', 'market', 'starting_occupancy_proportion']], 
+                         on=['year', 'quarter', 'market'], 
+                         how='left')
+
+    # Fill any missing starting occupancy with a reasonable default (e.g., 1.0 meaning 100% utilization)
+    market_df['starting_occupancy_proportion'] = market_df['starting_occupancy_proportion'].fillna(1.0)
+    
+    # Calculate adjusted used space and underutilized space
+    market_df['adjusted_used_space'] = market_df['used_space'] * market_df['starting_occupancy_proportion']
+    market_df['underutilized_space'] = market_df['used_space'] * (1 - market_df['starting_occupancy_proportion'])
 
     # Fill any missing inflation rates with 0
     market_df['inflation_rate'] = market_df['inflation_rate'].fillna(0)
@@ -78,9 +94,6 @@ def space_utlization_bar(market, is_premium_quality):
     # Create a baseline for inflation adjustment (100% at start)
     base_inflation = 100.0
     market_df['cumulative_inflation'] = float(base_inflation)  # Properly initialized as float
-
-    # Sort by year and quarter to ensure proper sequence
-    market_df = market_df.sort_values(by=['year', 'quarter'])
 
     # Calculate cumulative inflation factor (convert percentage to multiplicative factor)
     for i in range(1, len(market_df)):
@@ -94,8 +107,9 @@ def space_utlization_bar(market, is_premium_quality):
     market_df['sublet_rent_adjusted'] = market_df['sublet_internal_class_rent'] * market_df['inflation_factor']
 
     # Calculate percentages for stacked bar segments
-    market_df['total_stacked'] = market_df['used_space'] + market_df['direct_available_space'] + market_df['sublet_available_space']
-    market_df['used_space_pct'] = (market_df['used_space'] / market_df['total_stacked'] * 100).round(1)
+    market_df['total_stacked'] = market_df['adjusted_used_space'] + market_df['underutilized_space'] + market_df['direct_available_space'] + market_df['sublet_available_space']
+    market_df['adjusted_used_space_pct'] = (market_df['adjusted_used_space'] / market_df['total_stacked'] * 100).round(1)
+    market_df['underutilized_space_pct'] = (market_df['underutilized_space'] / market_df['total_stacked'] * 100).round(1)
     market_df['direct_space_pct'] = (market_df['direct_available_space'] / market_df['total_stacked'] * 100).round(1)
     market_df['sublet_space_pct'] = (market_df['sublet_available_space'] / market_df['total_stacked'] * 100).round(1)
 
@@ -105,44 +119,52 @@ def space_utlization_bar(market, is_premium_quality):
     # Set up x-axis positions
     x = np.arange(len(market_df['year_quarter']))
 
-    # Convert pandas Series to numpy arrays to avoid multi-dimensional indexing issues
-    used_space = market_df['used_space'].to_numpy()
-    direct_available_space = market_df['direct_available_space'].to_numpy()
-    sublet_available_space = market_df['sublet_available_space'].to_numpy()
-    used_space_pct = market_df['used_space_pct'].to_numpy()
-    direct_space_pct = market_df['direct_space_pct'].to_numpy()
-    sublet_space_pct = market_df['sublet_space_pct'].to_numpy()
-
     # Create the stacked bar chart with updated colors
     bar_width = 0.8
-    p1 = ax1.bar(x, used_space, bar_width, label='Used Space', color='#808080',  # Medium gray
+    # Convert pandas Series to numpy arrays for plotting
+    adjusted_used_space = market_df['adjusted_used_space'].to_numpy()
+    underutilized_space = market_df['underutilized_space'].to_numpy()
+    direct_available_space = market_df['direct_available_space'].to_numpy()
+    sublet_available_space = market_df['sublet_available_space'].to_numpy()
+    
+    p1 = ax1.bar(x, adjusted_used_space, bar_width, label='Adj. Used Space', color='#808080',  # Medium gray
                 edgecolor='white', linewidth=0.5)
-    p2 = ax1.bar(x, direct_available_space, bar_width, bottom=used_space, 
+    p2 = ax1.bar(x, underutilized_space, bar_width, bottom=adjusted_used_space, 
+                label='Underutilized Space', color='#D3D3D3',  # Light gray
+                edgecolor='white', linewidth=0.5)
+    bottom_values1 = adjusted_used_space + underutilized_space
+    p3 = ax1.bar(x, direct_available_space, bar_width, bottom=bottom_values1, 
                 label='Direct Space', color='#ADD8E6',  # Light blue
                 edgecolor='white', linewidth=0.5)
-    bottom_values = used_space + direct_available_space
-    p3 = ax1.bar(x, sublet_available_space, bar_width, bottom=bottom_values, 
+    bottom_values2 = bottom_values1 + direct_available_space
+    p4 = ax1.bar(x, sublet_available_space, bar_width, bottom=bottom_values2, 
                 label='Sublet Space', color='#FFCCCB',  # Light red
                 edgecolor='white', linewidth=0.5)
 
-    # Add percentage labels to each segment of the bars (now rotated)
-    for i, value in enumerate(used_space):
+    # Add percentage labels to each segment of the bars (horizontal orientation)
+    for i, value in enumerate(market_df['adjusted_used_space']):
         if value > 0:  # Only add labels if the space has a value
             height = value / 2  # Position label in middle of segment
-            ax1.text(i, height, f"{used_space_pct[i]}%", 
-                    ha='center', va='center', color='white', fontweight='bold', rotation=90)
+            ax1.text(i, height, f"{market_df['adjusted_used_space_pct'].iloc[i]}%", 
+                    ha='center', va='center', color='white', fontweight='bold')
             
-    for i, value in enumerate(direct_available_space):
+    for i, value in enumerate(market_df['underutilized_space']):
         if value > 0:
-            height = used_space[i] + value / 2
-            ax1.text(i, height, f"{direct_space_pct[i]}%", 
-                    ha='center', va='center', color='white', fontweight='bold', rotation=90)
+            height = market_df['adjusted_used_space'].iloc[i] + value / 2
+            ax1.text(i, height, f"{market_df['underutilized_space_pct'].iloc[i]}%", 
+                    ha='center', va='center', color='black', fontweight='bold')
             
-    for i, value in enumerate(sublet_available_space):
+    for i, value in enumerate(market_df['direct_available_space']):
         if value > 0:
-            height = bottom_values[i] + value / 2
-            ax1.text(i, height, f"{sublet_space_pct[i]}%", 
-                    ha='center', va='center', color='white', fontweight='bold', rotation=90)
+            height = bottom_values1[i] + value / 2
+            ax1.text(i, height, f"{market_df['direct_space_pct'].iloc[i]}%", 
+                    ha='center', va='center', color='white', fontweight='bold')
+            
+    for i, value in enumerate(market_df['sublet_available_space']):
+        if value > 0:
+            height = bottom_values2[i] + value / 2
+            ax1.text(i, height, f"{market_df['sublet_space_pct'].iloc[i]}%", 
+                    ha='center', va='center', color='white', fontweight='bold')
 
     # Create secondary axis for line charts
     ax2 = ax1.twinx()
@@ -158,8 +180,8 @@ def space_utlization_bar(market, is_premium_quality):
                 color='#8B0000', linewidth=2, label='Sublet Rent Price (Inflation Adj.)')  # Dark red
 
     # Set labels and title
-    ax1.set_xlabel('Year-Quarter', fontsize=12, labelpad=20)  # Added more padding
-    ax1.set_ylabel('Space (Million Square Feet)', fontsize=12)  # Updated to millions
+    ax1.set_xlabel('Year-Quarter', fontsize=12, labelpad=20)
+    ax1.set_ylabel('Space (Million Square Feet)', fontsize=12)
     ax2.set_ylabel('Rent ($ per Square Foot)', fontsize=12)
     quality_text = "Premium Quality" if is_premium_quality == 1 else "Standard Quality"
     plt.title(f'{market} {quality_text} Space Utilization and Inflation-Adjusted Rental Prices', fontsize=14)
@@ -180,11 +202,11 @@ def space_utlization_bar(market, is_premium_quality):
     ax2.set_ylim(bottom=0)
 
     # Combine legends from both axes
-    bars = [p1, p2, p3]
+    bars = [p1, p2, p3, p4]
     lines = ln1 + ln2
     labels = [b.get_label() for b in bars] + [l.get_label() for l in lines]
     ax1.legend(bars + lines, labels, loc='upper center', bbox_to_anchor=(0.5, -0.15), 
-            fancybox=True, shadow=True, ncol=5)
+            fancybox=True, shadow=True, ncol=6)
 
     # Adjust layout
     plt.tight_layout()
